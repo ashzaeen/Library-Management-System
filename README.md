@@ -11,6 +11,101 @@ A MySQL-backed library management system: a normalized (3NF) relational schema, 
 - **Automation:** triggers flag a loan as overdue when its row is updated, send overdue and due-soon notifications, reject checkouts with no copies left, expire stale reservations and write an activity log.
 - **Analytics:** views and ten ready-made reports for librarians.
 
+## Database at a glance
+
+```mermaid
+erDiagram
+    GENRES ||--o{ BOOKS : "classifies (optional)"
+    AUTHORS ||--|{ BOOKS : "writes"
+    USERS ||--o{ TRANSACTIONS : "borrows"
+    BOOKS ||--o{ TRANSACTIONS : "is borrowed in"
+    USERS ||--o{ RESERVATIONS : "places"
+    BOOKS ||--o{ RESERVATIONS : "is reserved in"
+    USERS ||--o{ NOTIFICATIONS : "receives"
+    TRANSACTIONS |o--o{ NOTIFICATIONS : "triggers (optional)"
+    USERS ||--o{ ACTIVITYLOG : "generates"
+
+    GENRES {
+        int genre_id PK "AUTO_INCREMENT"
+        varchar name UK "100, NOT NULL"
+        text description
+        timestamp created_at "DEFAULT now"
+    }
+    AUTHORS {
+        int author_id PK "AUTO_INCREMENT"
+        varchar name "200, NOT NULL, indexed"
+        text biography
+        date birth_date
+        varchar nationality "100"
+        timestamp created_at "DEFAULT now"
+    }
+    BOOKS {
+        int book_id PK "AUTO_INCREMENT"
+        varchar title "300, NOT NULL, indexed"
+        varchar isbn UK "20, indexed"
+        int author_id FK "NOT NULL, ON DELETE RESTRICT"
+        int genre_id FK "ON DELETE SET NULL"
+        smallint publication_year
+        varchar publisher "200"
+        int total_copies "NOT NULL, DEFAULT 1"
+        int available_copies "NOT NULL, DEFAULT 1"
+        text description
+        timestamp created_at
+        timestamp updated_at "ON UPDATE now"
+    }
+    USERS {
+        int user_id PK "AUTO_INCREMENT"
+        varchar name "200, NOT NULL"
+        varchar email UK "255, NOT NULL, indexed"
+        varchar phone "20"
+        text address
+        date registration_date "NOT NULL, DEFAULT today, indexed"
+        enum membership_status "active|inactive|suspended, indexed"
+        timestamp last_activity_date "NULL until first activity"
+        timestamp created_at
+    }
+    TRANSACTIONS {
+        int transaction_id PK "AUTO_INCREMENT"
+        int user_id FK "NOT NULL, ON DELETE CASCADE"
+        int book_id FK "NOT NULL, ON DELETE CASCADE"
+        date checkout_date "NOT NULL, DEFAULT today, indexed"
+        date due_date "NOT NULL, indexed"
+        date return_date "NULL while out"
+        enum status "checked_out|returned|overdue, indexed"
+        decimal fine_amount "10,2 DEFAULT 0.00"
+        timestamp created_at
+        timestamp updated_at "ON UPDATE now"
+    }
+    RESERVATIONS {
+        int reservation_id PK "AUTO_INCREMENT"
+        int user_id FK "NOT NULL, ON DELETE CASCADE"
+        int book_id FK "NOT NULL, ON DELETE CASCADE"
+        date reservation_date "NOT NULL, DEFAULT today, indexed"
+        enum status "active|fulfilled|cancelled|expired, indexed"
+        date expiry_date
+        timestamp created_at
+        timestamp updated_at "ON UPDATE now"
+    }
+    NOTIFICATIONS {
+        int notification_id PK "AUTO_INCREMENT"
+        int user_id FK "NOT NULL, ON DELETE CASCADE"
+        enum notification_type "overdue|reservation_ready|due_soon|general, indexed"
+        text message "NOT NULL"
+        timestamp notification_date "DEFAULT now, indexed"
+        boolean is_read "DEFAULT FALSE, indexed"
+        int related_transaction_id FK "NULL, ON DELETE SET NULL"
+    }
+    ACTIVITYLOG {
+        int log_id PK "AUTO_INCREMENT"
+        int user_id FK "NOT NULL, ON DELETE CASCADE"
+        enum activity_type "checkout|return|reservation|search|login, indexed"
+        text activity_description
+        timestamp activity_timestamp "DEFAULT now, indexed"
+    }
+```
+
+More diagrams, all rendered natively by GitHub: foreign-key delete rules, status lifecycles, flowcharts for each stored procedure, a trigger map, a checkout sequence diagram, view dependencies, the app's screen map and the build order. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Repository layout
 
 ```
@@ -24,6 +119,9 @@ database/
 app/
   library_app.py              Tkinter desktop app
   requirements.txt
+docs/
+  ARCHITECTURE.md             ER diagram, flows, trigger map, view dependencies, app map
+LICENSE                       MIT
 ```
 
 ### Schema
@@ -78,6 +176,10 @@ Monthly borrowing statistics, most active users, most borrowed books, overdue no
 ## Status
 
 The database layer (schema, procedures, triggers, views, reports) is implemented and loads cleanly on MySQL 8.0. Overdue status is set by a trigger when a loan row changes; there is no scheduled job, so the sample data's old loans only flip to overdue once updated. The desktop app is a work in progress: sign-in, registration, role-based navigation and the librarian dashboard with live statistics work. The remaining screens (manage books and users, transactions, reservations, reports, search and the member views) are placeholders. Sign-in is a demo: members are looked up by email only and the librarian account is hard-coded, so don't use it as-is for anything real.
+
+## License
+
+[MIT](LICENSE).
 
 ## Author
 
