@@ -13,7 +13,6 @@ Every diagram here is written in [Mermaid](https://mermaid.js.org/), so GitHub r
 7. [Views and the tables they read](#7-views-and-the-tables-they-read)
 8. [Desktop app](#8-desktop-app)
 9. [Build and setup order](#9-build-and-setup-order)
-10. [Notes from reading the code](#10-notes-from-reading-the-code)
 
 ---
 
@@ -492,22 +491,3 @@ flowchart LR
     G --> H["set LMS_DB_USER / LMS_DB_PASSWORD"]
     H --> I(["python app/library_app.py"])
 ```
-
----
-
-## 10. Notes and fixes
-
-Tested against MySQL 8.0.45 by loading all six scripts and calling the procedures directly.
-
-**Fixed**
-
-- **Last copy could not be checked out.** `CheckoutBook` used to decrement `available_copies` before inserting the transaction, so `ValidateBookAvailability` saw 0 and rejected the insert, and the failed call left the counter changed with a transaction open. The insert now comes first.
-- **Duplicate activity rows.** `CheckoutBook` and `ReserveBook` each wrote an `ActivityLog` row that the triggers (`UpdateUserActivityOnCheckout`, `LogReservationActivity`) wrote again, so every checkout and reservation was logged twice. The triggers now own that logging. (`ReturnBook` has no logging trigger, so it still logs its own row.)
-- **Open transactions on errors.** Each procedure now has an `EXIT HANDLER` that rolls back and returns an error message.
-- **Unknown user on checkout** used to slip past the status check and fail later on the foreign key; it now returns `ERROR: User not found`.
-
-**Still true**
-
-- **Overdue is lazy.** Overdue and expired status are set by `BEFORE UPDATE` triggers, so a row only changes when something updates it. A scheduled event (`CREATE EVENT`) would make this automatic.
-- **`ReserveBook` on an available book** creates the reservation and a `reservation_ready` notification but does not hold a copy back from checkout.
-- **Waiting-list reservations** are logged as plain "Reserved" rows by the trigger; the "(waiting list)" wording the procedure used to add is gone.
