@@ -203,14 +203,16 @@ stateDiagram-v2
 
 ## 4. Stored procedure flows
 
-Each procedure runs in its own `START TRANSACTION` and reports back through an `OUT p_result` parameter.
+Each procedure runs in its own `START TRANSACTION` and reports back through an `OUT p_result` parameter. Each also declares an `EXIT HANDLER FOR SQLEXCEPTION` that rolls everything back and returns `ERROR: Database error, nothing was changed`, so a failure never leaves a transaction open. Activity logging is left to the triggers (see [section 5](#5-trigger-map)) so each action is logged exactly once.
 
 ### `CheckoutBook(user_id, book_id, checkout_days, OUT result)`
 
 ```mermaid
 flowchart TD
     S([CALL CheckoutBook]) --> TX[START TRANSACTION]
-    TX --> U{membership_status<br/>is active?}
+    TX --> UX{user exists?}
+    UX -- no --> E0[/"ERROR: User not found"/] --> RB0[ROLLBACK]
+    UX -- yes --> U{membership_status<br/>is active?}
     U -- no --> E1[/"ERROR: User account is not active"/]
     E1 --> RB1[ROLLBACK]
     U -- yes --> LK["SELECT available_copies, title<br/>FROM Books ... FOR UPDATE<br/>(row lock)"]
@@ -219,11 +221,9 @@ flowchart TD
     F -- yes --> A{available_copies > 0?}
     A -- no --> E3[/"ERROR: No copies available"/] --> RB3[ROLLBACK]
     A -- yes --> D["due_date = today + checkout_days"]
-    D --> C1["UPDATE Books<br/>available_copies - 1"]
-    C1 --> C2["INSERT Transactions<br/>status = checked_out"]
-    C2 --> C3["INSERT ActivityLog (checkout)"]
-    C3 --> C4["UPDATE Users<br/>last_activity_date = now"]
-    C4 --> C5["UPDATE Reservations<br/>active to fulfilled<br/>(same user and book)"]
+    D --> C2["INSERT Transactions<br/>status = checked_out<br/>(triggers validate, log, stamp user)"]
+    C2 --> C1["UPDATE Books<br/>available_copies - 1"]
+    C1 --> C5["UPDATE Reservations<br/>active to fulfilled<br/>(same user and book)"]
     C5 --> OK[/"SUCCESS: Book checked out. Due date: ..."/]
     OK --> CM[COMMIT]
 ```
@@ -261,13 +261,11 @@ flowchart TD
     D -- yes --> E3[/"ERROR: already reserved"/] --> RB3[ROLLBACK]
     D -- no --> EX["expiry = today + 7 days"]
     EX --> AV{available_copies > 0?}
-    AV -- yes --> I1["INSERT Reservations (active)"]
-    I1 --> I2["INSERT ActivityLog (reservation)"]
-    I2 --> I3["INSERT Notifications<br/>(reservation_ready)"]
+    AV -- yes --> I1["INSERT Reservations (active)<br/>(trigger logs the activity)"]
+    I1 --> I3["INSERT Notifications<br/>(reservation_ready)"]
     I3 --> R1[/"SUCCESS: Book reserved. Expires on ..."/]
-    AV -- no --> W1["INSERT Reservations (active)<br/>= waiting list"]
-    W1 --> W2["INSERT ActivityLog<br/>(reservation, waiting list)"]
-    W2 --> R2[/"SUCCESS: added to the waiting list"/]
+    AV -- no --> W1["INSERT Reservations (active)<br/>= waiting list<br/>(trigger logs the activity)"]
+    W1 --> R2[/"SUCCESS: added to the waiting list"/]
     R1 --> CM[COMMIT]
     R2 --> CM
 ```
@@ -330,7 +328,7 @@ flowchart LR
 
 ## 6. Checkout end to end
 
-What fires, and in what order, when a librarian checks a book out through `CheckoutBook`.
+What fires, and in what order, when a librarian checks a book out through `CheckoutBook`. The transaction row is inserted *before* the copy counter is decremented so that `ValidateBookAvailability` sees the real count and the last copy of a title can still be checked out.
 
 ```mermaid
 sequenceDiagram
@@ -348,10 +346,9 @@ sequenceDiagram
     L->>P: CALL CheckoutBook(user, book, days, @result)
     P->>Us: read membership_status
     P->>Bk: SELECT ... FOR UPDATE (lock row)
-    P->>Bk: available_copies - 1
     P->>Tx: INSERT (checked_out)
     activate Tg
-    Tx-->>Tg: BEFORE INSERT: ValidateBookAvailability
+    Tx-->>Tg: BEFORE INSERT: ValidateBookAvailability (copies still > 0)
     Tx-->>Tg: AFTER INSERT: UpdateUserActivityOnCheckout
     Tg->>Us: last_activity_date = now
     Tg->>Lg: INSERT checkout row
@@ -360,8 +357,7 @@ sequenceDiagram
         Tg->>Nf: INSERT due_soon
     end
     deactivate Tg
-    P->>Lg: INSERT checkout row (the procedure's own log)
-    P->>Us: last_activity_date = now
+    P->>Bk: available_copies - 1
     P->>Rs: active to fulfilled (same user and book)
     P-->>L: SUCCESS: Book checked out. Due date ...
 ```
@@ -499,11 +495,19 @@ flowchart LR
 
 ---
 
-## 10. Notes from reading the code
+## 10. Notes and fixes
 
-These come from reading the SQL, not from running it. They are worth knowing before building on the database layer.
+Tested against MySQL 8.0.45 by loading all six scripts and calling the procedures directly.
 
-- **Duplicate activity rows.** `CheckoutBook` writes its own `ActivityLog` row, and the `UpdateUserActivityOnCheckout` trigger writes another when the transaction row is inserted, so one checkout produces two `checkout` log entries. `ReserveBook` and `LogReservationActivity` overlap the same way for reservations.
-- **Possible last-copy conflict (unverified).** `CheckoutBook` decrements `available_copies` before inserting the transaction, and `ValidateBookAvailability` (BEFORE INSERT) rejects the insert when `available_copies <= 0`. For a book's final copy the counter is already 0 at that point, so the trigger may reject it. This should be tested on a live MySQL instance before relying on it.
-- **Overdue is lazy.** Both overdue and expired status are set by `BEFORE UPDATE` triggers, so a row only changes when something updates it. A scheduled event (`CREATE EVENT`) would make this automatic.
+**Fixed**
+
+- **Last copy could not be checked out.** `CheckoutBook` used to decrement `available_copies` before inserting the transaction, so `ValidateBookAvailability` saw 0 and rejected the insert, and the failed call left the counter changed with a transaction open. The insert now comes first.
+- **Duplicate activity rows.** `CheckoutBook` and `ReserveBook` each wrote an `ActivityLog` row that the triggers (`UpdateUserActivityOnCheckout`, `LogReservationActivity`) wrote again, so every checkout and reservation was logged twice. The triggers now own that logging. (`ReturnBook` has no logging trigger, so it still logs its own row.)
+- **Open transactions on errors.** Each procedure now has an `EXIT HANDLER` that rolls back and returns an error message.
+- **Unknown user on checkout** used to slip past the status check and fail later on the foreign key; it now returns `ERROR: User not found`.
+
+**Still true**
+
+- **Overdue is lazy.** Overdue and expired status are set by `BEFORE UPDATE` triggers, so a row only changes when something updates it. A scheduled event (`CREATE EVENT`) would make this automatic.
 - **`ReserveBook` on an available book** creates the reservation and a `reservation_ready` notification but does not hold a copy back from checkout.
+- **Waiting-list reservations** are logged as plain "Reserved" rows by the trigger; the "(waiting list)" wording the procedure used to add is gone.

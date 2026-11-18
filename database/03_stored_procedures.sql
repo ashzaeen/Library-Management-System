@@ -22,7 +22,13 @@ BEGIN
     DECLARE v_available_copies INT;
     DECLARE v_existing_reservation INT;
     DECLARE v_expiry_date DATE;
-    
+    -- On any unexpected error, undo everything and report it instead of leaving a transaction open
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = 'ERROR: Database error, nothing was changed';
+    END;
+
     -- Start transaction
     START TRANSACTION;
     
@@ -61,9 +67,7 @@ BEGIN
                 INSERT INTO Reservations (user_id, book_id, reservation_date, status, expiry_date)
                 VALUES (p_user_id, p_book_id, CURDATE(), 'active', v_expiry_date);
                 
-                -- Log the activity
-                INSERT INTO ActivityLog (user_id, activity_type, activity_description)
-                VALUES (p_user_id, 'reservation', CONCAT('Reserved book ID: ', p_book_id));
+                -- (The LogReservationActivity trigger writes the ActivityLog row.)
                 
                 -- Send notification
                 INSERT INTO Notifications (user_id, notification_type, message)
@@ -77,9 +81,7 @@ BEGIN
                 INSERT INTO Reservations (user_id, book_id, reservation_date, status, expiry_date)
                 VALUES (p_user_id, p_book_id, CURDATE(), 'active', v_expiry_date);
                 
-                -- Log the activity
-                INSERT INTO ActivityLog (user_id, activity_type, activity_description)
-                VALUES (p_user_id, 'reservation', CONCAT('Reserved book ID: ', p_book_id, ' (waiting list)'));
+                -- (The LogReservationActivity trigger writes the ActivityLog row.)
                 
                 SET p_result = 'SUCCESS: Book currently unavailable. You are added to the waiting list.';
                 COMMIT;
@@ -106,7 +108,13 @@ BEGIN
     DECLARE v_due_date DATE;
     DECLARE v_book_title VARCHAR(300);
     DECLARE v_user_status VARCHAR(20);
-    
+    -- On any unexpected error, undo everything and report it instead of leaving a transaction open
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = 'ERROR: Database error, nothing was changed';
+    END;
+
     -- Start transaction
     START TRANSACTION;
     
@@ -115,8 +123,11 @@ BEGIN
     FROM Users
     WHERE user_id = p_user_id;
     
-    -- Check if user can checkout (must be active)
-    IF v_user_status != 'active' THEN
+    -- Check if user can checkout (must exist and be active)
+    IF v_user_status IS NULL THEN
+        SET p_result = 'ERROR: User not found';
+        ROLLBACK;
+    ELSEIF v_user_status != 'active' THEN
         SET p_result = 'ERROR: User account is not active';
         ROLLBACK;
     ELSE
@@ -136,23 +147,17 @@ BEGIN
             -- Calculate due date
             SET v_due_date = DATE_ADD(CURDATE(), INTERVAL p_checkout_days DAY);
             
+            -- Create transaction record first. The ValidateBookAvailability trigger checks the
+            -- copy count here, so the counter must not be decremented yet (otherwise the last
+            -- copy of a title could never be checked out). The UpdateUserActivityOnCheckout
+            -- trigger also logs the activity and stamps the user's last_activity_date.
+            INSERT INTO Transactions (user_id, book_id, checkout_date, due_date, status)
+            VALUES (p_user_id, p_book_id, CURDATE(), v_due_date, 'checked_out');
+            
             -- Update available copies
             UPDATE Books
             SET available_copies = available_copies - 1
             WHERE book_id = p_book_id;
-            
-            -- Create transaction record
-            INSERT INTO Transactions (user_id, book_id, checkout_date, due_date, status)
-            VALUES (p_user_id, p_book_id, CURDATE(), v_due_date, 'checked_out');
-            
-            -- Log the activity
-            INSERT INTO ActivityLog (user_id, activity_type, activity_description)
-            VALUES (p_user_id, 'checkout', CONCAT('Checked out "', v_book_title, '"'));
-            
-            -- Update user last activity
-            UPDATE Users
-            SET last_activity_date = CURRENT_TIMESTAMP
-            WHERE user_id = p_user_id;
             
             -- If user had a reservation, mark it as fulfilled
             UPDATE Reservations
@@ -184,7 +189,13 @@ BEGIN
     DECLARE v_due_date DATE;
     DECLARE v_fine_amount DECIMAL(10, 2);
     DECLARE v_days_overdue INT;
-    
+    -- On any unexpected error, undo everything and report it instead of leaving a transaction open
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_result = 'ERROR: Database error, nothing was changed';
+    END;
+
     -- Start transaction
     START TRANSACTION;
     

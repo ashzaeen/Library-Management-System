@@ -175,7 +175,7 @@ Monthly borrowing statistics, most active users, most borrowed books, overdue no
 
 ## Status
 
-The database layer (schema, procedures, triggers, views, reports) is implemented and loads cleanly on MySQL 8.0. Overdue status is set by a trigger when a loan row changes; there is no scheduled job, so the sample data's old loans only flip to overdue once updated. The desktop app is a work in progress: sign-in, registration, role-based navigation and the librarian dashboard with live statistics work. The remaining screens (manage books and users, transactions, reservations, reports, search and the member views) are placeholders. Sign-in is a demo: members are looked up by email only and the librarian account is hard-coded, so don't use it as-is for anything real.
+The database layer (schema, procedures, triggers, views, reports) is implemented and tested on MySQL 8.0: checkout (including a title's last copy), return with fines, reservations and waiting lists, and overdue notifications all behave as described. Overdue status is set by a trigger when a loan row changes; there is no scheduled job, so the sample data's old loans only flip to overdue once updated. The desktop app is a work in progress: sign-in, registration, role-based navigation and the librarian dashboard with live statistics work. The remaining screens (manage books and users, transactions, reservations, reports, search and the member views) are placeholders. Sign-in is a demo: members are looked up by email only and the librarian account is hard-coded, so don't use it as-is for anything real.
 
 ## License
 
