@@ -37,7 +37,19 @@ class LibraryManagementApp:
         self.create_login_screen()
     
     def connect_database(self):
-        """Establish connection to MySQL database"""
+        """Establish connection to MySQL database.
+
+        Reuses the open connection if there is one. Opening a fresh one on every
+        screen (and dropping the old one) left cursors pointing at a connection
+        that no longer existed, which raised ReferenceError on librarian login.
+        """
+        if self.connection is not None:
+            try:
+                if self.connection.is_connected():
+                    return True
+            except Error:
+                pass
+            self.connection = None  # it dropped; fall through and reconnect
         try:
             self.connection = mysql.connector.connect(
                 host='localhost',
@@ -502,6 +514,7 @@ class LibraryManagementApp:
         """Logout and return to login screen"""
         if self.connection and self.connection.is_connected():
             self.connection.close()
+        self.connection = None
         self.current_user = None
         self.user_role = None
         self.create_login_screen()
