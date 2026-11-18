@@ -1,12 +1,12 @@
 # Library Management System
 
-A MySQL-backed library management system: a normalized (3NF) relational schema, business logic in stored procedures and triggers, reporting views, and a Python desktop app on top. Built as my Honors Project for CSE 3330 (Database Systems) at UT Arlington.
+A MySQL-backed library management system: a normalized (3NF) relational schema, business logic in stored procedures and triggers, reporting views, and a Python desktop app on top. Built as my Honors Project for CSE 3330 (Database Systems) at UT Arlington. It is a teaching and portfolio project: a worked example of relational design, procedural SQL and a desktop front end, not a production library system.
 
 ## What it does
 
 - **Catalog:** books with one author and one genre each, ISBNs, and total vs. available copies.
 - **Members:** registration, membership status (active / inactive / suspended) and last-activity tracking.
-- **Circulation:** checkout and return with automatic due dates and fine calculation.
+- **Circulation:** checkout and return with automatic due dates and fines. A late return costs $0.50 per day, with no grace period or cap; the loan length is a parameter of `CheckoutBook`. Returning a book does not send a notification (overdue and due-soon notices come from triggers).
 - **Reservations:** reserve a book even while it is checked out, with expiry dates.
 - **Automation:** triggers flag a loan as overdue when its row is updated, send overdue and due-soon notifications, reject checkouts with no copies left, expire stale reservations and write an activity log.
 - **Analytics:** views and ten ready-made reports for librarians.
@@ -15,96 +15,18 @@ A MySQL-backed library management system: a normalized (3NF) relational schema, 
 
 ```mermaid
 erDiagram
-    GENRES ||--o{ BOOKS : "classifies (optional)"
+    GENRES ||--o{ BOOKS : "classifies"
     AUTHORS ||--|{ BOOKS : "writes"
     USERS ||--o{ TRANSACTIONS : "borrows"
     BOOKS ||--o{ TRANSACTIONS : "is borrowed in"
     USERS ||--o{ RESERVATIONS : "places"
     BOOKS ||--o{ RESERVATIONS : "is reserved in"
     USERS ||--o{ NOTIFICATIONS : "receives"
-    TRANSACTIONS |o--o{ NOTIFICATIONS : "triggers (optional)"
+    TRANSACTIONS |o--o{ NOTIFICATIONS : "triggers"
     USERS ||--o{ ACTIVITYLOG : "generates"
-
-    GENRES {
-        int genre_id PK "AUTO_INCREMENT"
-        varchar name UK "100, NOT NULL"
-        text description
-        timestamp created_at "DEFAULT now"
-    }
-    AUTHORS {
-        int author_id PK "AUTO_INCREMENT"
-        varchar name "200, NOT NULL, indexed"
-        text biography
-        date birth_date
-        varchar nationality "100"
-        timestamp created_at "DEFAULT now"
-    }
-    BOOKS {
-        int book_id PK "AUTO_INCREMENT"
-        varchar title "300, NOT NULL, indexed"
-        varchar isbn UK "20, indexed"
-        int author_id FK "NOT NULL, ON DELETE RESTRICT"
-        int genre_id FK "ON DELETE SET NULL"
-        smallint publication_year
-        varchar publisher "200"
-        int total_copies "NOT NULL, DEFAULT 1"
-        int available_copies "NOT NULL, DEFAULT 1"
-        text description
-        timestamp created_at
-        timestamp updated_at "ON UPDATE now"
-    }
-    USERS {
-        int user_id PK "AUTO_INCREMENT"
-        varchar name "200, NOT NULL"
-        varchar email UK "255, NOT NULL, indexed"
-        varchar phone "20"
-        text address
-        date registration_date "NOT NULL, DEFAULT today, indexed"
-        enum membership_status "active|inactive|suspended, indexed"
-        timestamp last_activity_date "NULL until first activity"
-        timestamp created_at
-    }
-    TRANSACTIONS {
-        int transaction_id PK "AUTO_INCREMENT"
-        int user_id FK "NOT NULL, ON DELETE CASCADE"
-        int book_id FK "NOT NULL, ON DELETE CASCADE"
-        date checkout_date "NOT NULL, DEFAULT today, indexed"
-        date due_date "NOT NULL, indexed"
-        date return_date "NULL while out"
-        enum status "checked_out|returned|overdue, indexed"
-        decimal fine_amount "10,2 DEFAULT 0.00"
-        timestamp created_at
-        timestamp updated_at "ON UPDATE now"
-    }
-    RESERVATIONS {
-        int reservation_id PK "AUTO_INCREMENT"
-        int user_id FK "NOT NULL, ON DELETE CASCADE"
-        int book_id FK "NOT NULL, ON DELETE CASCADE"
-        date reservation_date "NOT NULL, DEFAULT today, indexed"
-        enum status "active|fulfilled|cancelled|expired, indexed"
-        date expiry_date
-        timestamp created_at
-        timestamp updated_at "ON UPDATE now"
-    }
-    NOTIFICATIONS {
-        int notification_id PK "AUTO_INCREMENT"
-        int user_id FK "NOT NULL, ON DELETE CASCADE"
-        enum notification_type "overdue|reservation_ready|due_soon|general, indexed"
-        text message "NOT NULL"
-        timestamp notification_date "DEFAULT now, indexed"
-        boolean is_read "DEFAULT FALSE, indexed"
-        int related_transaction_id FK "NULL, ON DELETE SET NULL"
-    }
-    ACTIVITYLOG {
-        int log_id PK "AUTO_INCREMENT"
-        int user_id FK "NOT NULL, ON DELETE CASCADE"
-        enum activity_type "checkout|return|reservation|search|login, indexed"
-        text activity_description
-        timestamp activity_timestamp "DEFAULT now, indexed"
-    }
 ```
 
-More diagrams, all rendered natively by GitHub: foreign-key delete rules, status lifecycles, flowcharts for each stored procedure, a trigger map, a checkout sequence diagram, view dependencies, the app's screen map and the build order. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The full diagram with every column, key and index, plus more diagrams (all rendered natively by GitHub): foreign-key delete rules, status lifecycles, flowcharts for each stored procedure, a trigger map, a checkout sequence diagram, view dependencies, the app's screen map and the build order. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Repository layout
 
@@ -147,7 +69,7 @@ Monthly borrowing statistics, most active users, most borrowed books, overdue no
 
 ## Getting started
 
-**Requirements:** MySQL 8.0.16 or newer (the schema uses `CHECK` constraints), Python 3.9+.
+**Requirements:** MySQL 8.0.16 or newer (the schema uses `CHECK` constraints) with the `mysql` command-line client on your PATH, and Python 3.9+. The app talks to MySQL through `mysql-connector-python`, which the pip step below installs.
 
 1. Create the database, in order. Note that `01_create_tables.sql` drops and recreates `LibraryManagementSystem`.
 
@@ -166,12 +88,13 @@ Monthly borrowing statistics, most active users, most borrowed books, overdue no
    pip install -r app/requirements.txt
    export LMS_DB_USER=root
    export LMS_DB_PASSWORD=your-password   # PowerShell: $env:LMS_DB_PASSWORD="your-password"
+                                          # Windows cmd:  set LMS_DB_PASSWORD=your-password
    python app/library_app.py
    ```
 
    It connects to `localhost` and the `LibraryManagementSystem` database.
 
-3. Sign in. Choose **user** and enter the email of a member from the sample data (or register one), or choose **librarian** and use the demo account `admin@library.com`.
+3. Sign in. Choose **user** and enter the email of a member from the sample data (or register one), or choose **librarian** and use the demo account `admin@library.com` (no password). Step 1 loads sample data, so the dashboard has something to show.
 
 ## Status
 
